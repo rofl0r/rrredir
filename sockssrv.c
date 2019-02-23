@@ -35,7 +35,7 @@
 #endif
 
 static const struct server* server;
-static int bind_mode;
+static union sockaddr_union bind_addr = {.v4.sin_family = AF_UNSPEC};
 unsigned long timeout;
 static sblist* targets;
 
@@ -91,7 +91,7 @@ static int connect_target(struct client *client) {
 				return -1;
 			}
 		}
-		if(bind_mode && server_bindtoip(server, fd) == -1)
+		if(SOCKADDR_UNION_AF(&bind_addr) != AF_UNSPEC && bindtoip(fd, &bind_addr) == -1)
 			goto eval_errno;
 
 		int flags = fcntl(fd, F_GETFL);
@@ -214,10 +214,10 @@ static int usage(void) {
 	dprintf(2,
 		"RR Redir - a round-robin port redirector\n"
 		"----------------------------------------\n"
-		"usage: rrredir [-b -i listenip -p port -t timeout] ip1:port1 ip2:port2 ...\n"
+		"usage: rrredir [-i listenip -p port -t timeout -b bindaddr] ip1:port1 ip2:port2 ...\n"
 		"all arguments are optional.\n"
 		"by default listenip is 0.0.0.0 and port 1080.\n\n"
-		"option -b forces outgoing connections to be bound to the ip specified with -i\n"
+		"option -b specifies which ip outgoing connections are bound to\n"
 		"the -t timeout is specified in seconds, default: %lu\n"
 		"if timeout is set to 0, block until the OS cancels conn. attempt\n"
 		"\n"
@@ -233,10 +233,10 @@ int main(int argc, char** argv) {
 	const char *listenip = "0.0.0.0";
 	unsigned port = 1080;
 	timeout = 0;
-	while((c = getopt(argc, argv, ":bi:p:t:")) != -1) {
+	while((c = getopt(argc, argv, ":b:i:p:t:")) != -1) {
 		switch(c) {
 			case 'b':
-				bind_mode = 1;
+				resolve_sa(optarg, 0, &bind_addr);
 				break;
 			case 'i':
 				listenip = optarg;
