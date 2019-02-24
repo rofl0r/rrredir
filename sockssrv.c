@@ -69,7 +69,7 @@ static int connect_target(struct client *client) {
 	union sockaddr_union target;
 	for(i=0; i<sblist_getsize(targets); i++) {
 		target = *(union sockaddr_union*)sblist_get(targets, i);
-		int af = target.v4.sin_family,
+		int af = SOCKADDR_UNION_AF(&target),
 		fd = socket(af, SOCK_STREAM, 0);
 		if(fd == -1) {
 			eval_errno: ;
@@ -136,14 +136,14 @@ static int connect_target(struct client *client) {
 			char clientname[256], servname[256];
 			int af;
 			void *ipdata;
-			af = client->addr.v4.sin_family;
-			ipdata = af == AF_INET ? (void*)&client->addr.v4.sin_addr : (void*)&client->addr.v6.sin6_addr;
+			af = SOCKADDR_UNION_AF(&client->addr);
+			ipdata = SOCKADDR_UNION_ADDRESS(&client->addr);
 			inet_ntop(af, ipdata, clientname, sizeof clientname);
 
-			af = target.v4.sin_family;
-			ipdata = af == AF_INET ? (void*)&target.v4.sin_addr : (void*)&target.v6.sin6_addr;
+			af = SOCKADDR_UNION_AF(&target);
+			ipdata = SOCKADDR_UNION_ADDRESS(&target);
 			inet_ntop(af, ipdata, servname, sizeof servname);
-			dolog("client[%d] %s: connected to %s:%d\n", client->fd, clientname, servname, htons(af == AF_INET ? target.v4.sin_port : target.v6.sin6_port));
+			dolog("client[%d] %s: connected to %s:%d\n", client->fd, clientname, servname, htons(SOCKADDR_UNION_PORT(&target)));
 		}
 		return fd;
 	}
