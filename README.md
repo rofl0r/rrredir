@@ -23,12 +23,12 @@ setup.
 command line options
 ------------------------
 
-    rrredir [-b -i listenip -p port -t timeout] ip1:port1 ip2:port2...
+    rrredir [-i listenip -p port -t timeout -b bindaddr] ip1:port1 ip2:port2...
 
 all arguments are optional.
 by default listenip is 0.0.0.0 and port 1080.
 
-option -b forces outgoing connections to be bound to the ip specified with -i
+option -b specifies which ip outgoing connections are bound to
 the -t timeout is specified in seconds, default: 0
 if timeout is set to 0, block until the OS cancels conn. attempt
 
