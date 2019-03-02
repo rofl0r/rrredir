@@ -35,10 +35,13 @@
 #endif
 
 static const struct server* server;
-static union sockaddr_union bind_addr = {.v4.sin_family = AF_UNSPEC};
 unsigned long timeout;
 static sblist* targets;
 
+struct target {
+	union sockaddr_union addr;
+	union sockaddr_union bind_addr;
+};
 struct thread {
 	pthread_t pt;
 	struct client client;
@@ -66,10 +69,10 @@ static struct timeval* make_timeval(struct timeval* tv, unsigned long timeout) {
 
 static int connect_target(struct client *client) {
 	size_t i;
-	union sockaddr_union target;
+	struct target target;
 	for(i=0; i<sblist_getsize(targets); i++) {
-		target = *(union sockaddr_union*)sblist_get(targets, i);
-		int af = SOCKADDR_UNION_AF(&target),
+		target = *(struct target*)sblist_get(targets, i);
+		int af = SOCKADDR_UNION_AF(&target.addr),
 		fd = socket(af, SOCK_STREAM, 0);
 		if(fd == -1) {
 			eval_errno: ;
@@ -91,7 +94,8 @@ static int connect_target(struct client *client) {
 				return -1;
 			}
 		}
-		if(SOCKADDR_UNION_AF(&bind_addr) != AF_UNSPEC && bindtoip(fd, &bind_addr) == -1)
+		if(SOCKADDR_UNION_AF(&target.bind_addr) != AF_UNSPEC &&
+		   bindtoip(fd, &target.bind_addr) == -1)
 			goto eval_errno;
 
 		int flags = fcntl(fd, F_GETFL);
@@ -102,7 +106,7 @@ static int connect_target(struct client *client) {
 			continue;
 		}
 
-		if(connect(fd, (void*)&target, sizeof(target)) == -1) {
+		if(connect(fd, (void*)&target.addr, sizeof(target.addr)) == -1) {
 			int e = errno;
 			if (!(e == EINPROGRESS || e == EWOULDBLOCK))
 				goto eval_errno;
@@ -140,10 +144,10 @@ static int connect_target(struct client *client) {
 			ipdata = SOCKADDR_UNION_ADDRESS(&client->addr);
 			inet_ntop(af, ipdata, clientname, sizeof clientname);
 
-			af = SOCKADDR_UNION_AF(&target);
-			ipdata = SOCKADDR_UNION_ADDRESS(&target);
+			af = SOCKADDR_UNION_AF(&target.addr);
+			ipdata = SOCKADDR_UNION_ADDRESS(&target.addr);
 			inet_ntop(af, ipdata, servname, sizeof servname);
-			dolog("client[%d] %s: connected to %s:%d\n", client->fd, clientname, servname, htons(SOCKADDR_UNION_PORT(&target)));
+			dolog("client[%d] %s: connected to %s:%d\n", client->fd, clientname, servname, htons(SOCKADDR_UNION_PORT(&target.addr)));
 		}
 		return fd;
 	}
@@ -210,6 +214,11 @@ static void collect(sblist *threads) {
 	}
 }
 
+static int complain_bind(const char* addr) {
+	dprintf(2, "error: the supplied bind address %s could not be resolved\n", addr);
+	return 1;
+}
+
 static int usage(void) {
 	dprintf(2,
 		"RR Redir - a round-robin port redirector\n"
@@ -217,7 +226,9 @@ static int usage(void) {
 		"usage: rrredir [-i listenip -p port -t timeout -b bindaddr] ip1:port1 ip2:port2 ...\n"
 		"all arguments are optional.\n"
 		"by default listenip is 0.0.0.0 and port 1080.\n\n"
-		"option -b specifies which ip outgoing connections are bound to\n"
+		"option -b specifies the default ip outgoing connections are bound to\n"
+		"it can be overruled per-target by appending @bindip to the target addr\n"
+		"e.g. ip1:port1@bindip1\n"
 		"the -t timeout is specified in seconds, default: %lu\n"
 		"if timeout is set to 0, block until the OS cancels conn. attempt\n"
 		"\n"
@@ -230,13 +241,13 @@ static int usage(void) {
 
 int main(int argc, char** argv) {
 	int c;
-	const char *listenip = "0.0.0.0";
+	const char *listenip = "0.0.0.0", *bind_arg = 0;
 	unsigned port = 1080;
 	timeout = 0;
 	while((c = getopt(argc, argv, ":b:i:p:t:")) != -1) {
 		switch(c) {
 			case 'b':
-				resolve_sa(optarg, 0, &bind_addr);
+				bind_arg = optarg;
 				break;
 			case 'i':
 				listenip = optarg;
@@ -253,14 +264,16 @@ int main(int argc, char** argv) {
 				return usage();
 		}
 	}
-	targets = sblist_new(sizeof(union sockaddr_union), 8);
+	targets = sblist_new(sizeof(struct target), 8);
 	while(argv[optind]) {
-		char *p = strchr(argv[optind], ':');
+		char *p = strchr(argv[optind], ':'), *q;
 		if(!p) {
 			dprintf(2, "error: expected ip:port tuple\n");
 			return usage();
 		}
 		*p = 0;
+		q = strchr(p+1, '@');
+		if(q) *q = 0;
 		int tport = atoi(p+1);
 		struct addrinfo* remote;
 		if(resolve(argv[optind], tport, &remote)) {
@@ -268,9 +281,19 @@ int main(int argc, char** argv) {
 			dprintf(2, "error: cannot resolve %s\n", argv[optind]);
 			return 1;
 		}
-		union sockaddr_union a;
-		memcpy(&a, remote->ai_addr, remote->ai_addrlen);
-		sblist_add(targets, &a);
+		struct target t = {0};
+		if(!q) {
+			if(bind_arg) {
+				if(resolve_sa(bind_arg, 0, &t.bind_addr))
+					return complain_bind(bind_arg);
+			} else
+				SOCKADDR_UNION_AF(&t.bind_addr) = AF_UNSPEC;
+		} else {
+			if(resolve_sa(q+1, 0, &t.bind_addr))
+				return complain_bind(q+1);
+		}
+		memcpy(&t.addr, remote->ai_addr, remote->ai_addrlen);
+		sblist_add(targets, &t);
 		optind++;
 	};
 	if(!sblist_getsize(targets)) {
