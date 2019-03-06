@@ -28,7 +28,10 @@ command line options
 all arguments are optional.
 by default listenip is 0.0.0.0 and port 1080.
 
-option -b specifies which ip outgoing connections are bound to
+option -b specifies the default ip outgoing connections are bound to.
+it can be overruled per-target by appending @bindip to the target addr
+e.g. ip1:port1@bindip1
+
 the -t timeout is specified in seconds, default: 0
 if timeout is set to 0, block until the OS cancels conn. attempt
 
