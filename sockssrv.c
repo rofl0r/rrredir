@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include <signal.h>
-#include <sys/select.h>
+#include <poll.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <limits.h>
@@ -65,13 +65,6 @@ struct thread {
 static void dolog(const char* fmt, ...) { }
 #endif
 
-static struct timeval* make_timeval(struct timeval* tv, unsigned long timeout) {
-	if(!tv) return NULL;
-	tv->tv_sec = timeout / 1000;
-	tv->tv_usec = 1000 * (timeout % 1000);
-	return tv;
-}
-
 static int connect_target(struct client *client) {
 	size_t i;
 	struct target target;
@@ -120,16 +113,12 @@ static int connect_target(struct client *client) {
 		if(fcntl(fd, F_SETFL, flags) == -1)
 			goto err_fcntl;
 
-		fd_set wset;
-		struct timeval tv;
+		struct pollfd fds = {.fd = fd, .events = POLLOUT };
 		int optval, ret;
 		socklen_t optlen = sizeof(optval);
 
-		FD_ZERO(&wset);
-		FD_SET(fd, &wset);
-
-		ret = select(fd+1, NULL, &wset, NULL, timeout ? make_timeval(&tv, timeout*1000) : NULL);
-		if(ret == 1 && FD_ISSET(fd, &wset)) {
+		ret = poll(&fds, 1, timeout ? timeout*1000 : -1);
+		if(ret == 1 && (fds.revents & POLLOUT)) {
 			ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &optval, &optlen);
 			if(ret == -1) goto eval_errno;
 			else if(optval) {
@@ -160,28 +149,24 @@ static int connect_target(struct client *client) {
 }
 
 static void copyloop(int fd1, int fd2) {
-	int maxfd = fd2;
-	if(fd1 > fd2) maxfd = fd1;
-	fd_set fdsc, fds;
-	FD_ZERO(&fdsc);
-	FD_SET(fd1, &fdsc);
-	FD_SET(fd2, &fdsc);
+	struct pollfd fds[2] = {
+		[0] = {.fd = fd1, .events = POLLIN},
+		[1] = {.fd = fd2, .events = POLLIN},
+	};
 
 	while(1) {
-		memcpy(&fds, &fdsc, sizeof(fds));
 		/* inactive connections are reaped after 15 min to free resources.
 		   usually programs send keep-alive packets so this should only happen
 		   when a connection is really unused. */
-		struct timeval timeout = {.tv_sec = 60*15, .tv_usec = 0};
-		switch(select(maxfd+1, &fds, 0, 0, &timeout)) {
+		switch(poll(fds, 2, 60*15*1000)) {
 			case 0:
 				return;
 			case -1:
-				if(errno == EINTR) continue;
-				else perror("select");
+				if(errno == EINTR || errno == EAGAIN) continue;
+				else perror("poll");
 				return;
 		}
-		int infd = FD_ISSET(fd1, &fds) ? fd1 : fd2;
+		int infd = (fds[0].revents & POLLIN) ? fd1 : fd2;
 		int outfd = infd == fd2 ? fd1 : fd2;
 		char buf[1024];
 		ssize_t sent = 0, n = read(infd, buf, sizeof buf);
