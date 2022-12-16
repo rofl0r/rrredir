@@ -213,7 +213,7 @@ static int usage(void) {
 	dprintf(2,
 		"RR Redir - a round-robin port redirector\n"
 		"----------------------------------------\n"
-		"usage: rrredir [-i listenip -p port -t timeout -b bindaddr] ip1:port1 ip2:port2 ...\n"
+		"usage: rrredir [-i listenip -p port -t timeout -b bindaddr] [-I] ip1:port1 ip2:port2 ...\n"
 		"all arguments are optional.\n"
 		"by default listenip is 0.0.0.0 and port 1080.\n\n"
 		"option -b specifies the default ip outgoing connections are bound to\n"
@@ -221,6 +221,8 @@ static int usage(void) {
 		"e.g. ip1:port1@bindip1\n"
 		"the -t timeout is specified in seconds, default: %lu\n"
 		"if timeout is set to 0, block until the OS cancels conn. attempt\n"
+		"\n"
+		"option -I indicates running from inetd, then client comes from stdin\n"
 		"\n"
 		"all incoming connections will be redirected to ip1:port1, followed\n"
 		"by ip2:port2 if the former host is unreachable, etc.\n"
@@ -231,16 +233,20 @@ static int usage(void) {
 
 int main(int argc, char** argv) {
 	int c;
+	int inetd = 0;
 	const char *listenip = "0.0.0.0", *bind_arg = 0;
 	unsigned port = 1080;
 	timeout = 0;
-	while((c = getopt(argc, argv, ":b:i:p:t:")) != -1) {
+	while((c = getopt(argc, argv, ":b:i:p:t:I")) != -1) {
 		switch(c) {
 			case 'b':
 				bind_arg = optarg;
 				break;
 			case 'i':
 				listenip = optarg;
+				break;
+			case 'I':
+				inetd = 1;
 				break;
 			case 'p':
 				port = atoi(optarg);
@@ -291,6 +297,27 @@ int main(int argc, char** argv) {
 		return usage();
 	}
 	signal(SIGPIPE, SIG_IGN);
+
+	if(inetd) {
+		struct client c;
+		c.fd = STDIN_FILENO;
+		void *peer = SOCKADDR_UNION_ADDRESS(&c.addr);
+		socklen_t peerlen = SOCKADDR_UNION_LENGTH(&c.addr);
+
+		if (getpeername(c.fd, (struct sockaddr *)peer, &peerlen) < 0) {
+			dprintf(2, "error: inetd getpeername()\n");
+			return 1;
+		}
+
+		int fd = connect_target(&c);
+		if(fd != -1) {
+			copyloop(c.fd, fd);
+			close(fd);
+		}
+
+		return 0;
+	}
+
 	struct server s;
 	sblist *threads = sblist_new(sizeof (struct thread*), 8);
 	if(server_setup(&s, listenip, port)) {
