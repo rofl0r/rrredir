@@ -313,6 +313,8 @@ int main(int argc, char** argv) {
 		if(fd != -1) {
 			copyloop(c.fd, fd);
 			close(fd);
+		} else {
+			return 1; /* quit with error code */
 		}
 
 		return 0;
